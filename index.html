@@ -140,7 +140,7 @@
         // Firebase Imports
         import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
         import { getAuth, signInAnonymously, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
-        import { getFirestore, doc, setDoc, onSnapshot, collection, getDocs, serverTimestamp, setLogLevel, writeBatch, deleteDoc } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+        import { getFirestore, doc, setDoc, onSnapshot, collection, getDocs, serverTimestamp, setLogLevel, writeBatch, deleteDoc, addDoc } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
         // --- Configuration ---
         const firebaseConfig = {
@@ -205,7 +205,9 @@
         let frameCount = 0;
         let gameStarted = false;
         let unsubscribeFromLobby = null;
+        let unsubscribeFromObstacles = null;
         let animationFrameId = null;
+        let lobbyHostId = null;
 
         // --- Utility Functions ---
         function showView(viewId) {
@@ -267,6 +269,7 @@
         }
 
         function resetPlayer(player) {
+            if (!player) return;
             player.x = 100;
             player.y = canvas.height - PLAYER_SIZE;
             player.velocityY = 0;
@@ -306,7 +309,12 @@
         // --- Lobby Management ---
         async function handleCreateLobby() {
             lobbyId = generateLobbyId();
+            lobbyHostId = userId; // The creator is the host
             lobbyIdDisplay.textContent = lobbyId;
+            // Set host in lobby document
+            const lobbyRef = doc(db, "artifacts", appId, "public/data/lobbies", lobbyId);
+            await setDoc(lobbyRef, { hostId: userId, createdAt: serverTimestamp() });
+            
             showView('lobby-view');
             await joinLobby(lobbyId);
         }
@@ -319,13 +327,14 @@
             }
             joinError.textContent = "";
 
-            const lobbyPlayersRef = collection(db, "artifacts", appId, "public/data/lobbies", code, "players");
+            const lobbyRef = doc(db, "artifacts", appId, "public/data/lobbies", code);
             try {
-                const snapshot = await getDocs(lobbyPlayersRef);
-                if (snapshot.empty) {
+                const lobbySnap = await getDoc(lobbyRef);
+                if (!lobbySnap.exists()) {
                      joinError.textContent = "Lobby not found.";
                 } else {
                     lobbyId = code;
+                    lobbyHostId = lobbySnap.data().hostId;
                     lobbyIdDisplay.textContent = lobbyId;
                     showView('lobby-view');
                     await joinLobby(lobbyId);
@@ -340,19 +349,22 @@
             lobbyId = id;
             const player = initializePlayer(userId);
             startLobbyListener(lobbyId);
+            startObstacleListener(lobbyId);
             await updatePlayerInFirestore(player);
         }
 
         async function handleLeaveLobby() {
-            if (unsubscribeFromLobby) {
-                unsubscribeFromLobby();
-                unsubscribeFromLobby = null;
-            }
+            if (unsubscribeFromLobby) unsubscribeFromLobby();
+            if (unsubscribeFromObstacles) unsubscribeFromObstacles();
+            unsubscribeFromLobby = null;
+            unsubscribeFromObstacles = null;
+
             if (userId && lobbyId) {
                 const playerRef = doc(db, "artifacts", appId, "public/data/lobbies", lobbyId, "players", userId);
                 await deleteDoc(playerRef);
             }
             lobbyId = null;
+            lobbyHostId = null;
             players = {};
             showView('main-menu-view');
         }
@@ -369,7 +381,11 @@
                 });
                 
                 for (const playerId in remotePlayersData) {
-                    players[playerId] = { ...(players[playerId] || {}), ...remotePlayersData[playerId] };
+                    if (playerId !== userId) { // Don't overwrite local player's physics
+                         players[playerId] = { ...(players[playerId] || {}), ...remotePlayersData[playerId] };
+                    } else { // For local player, just update non-physics data
+                        players[playerId] = { ...remotePlayersData[playerId], ...players[playerId]};
+                    }
                 }
 
                 const remotePlayerIds = Object.keys(remotePlayersData);
@@ -396,6 +412,22 @@
                         endRound();
                     }
                 }
+            });
+        }
+        
+        function startObstacleListener(id) {
+            if (unsubscribeFromObstacles) unsubscribeFromObstacles();
+            const obstaclesRef = collection(db, "artifacts", appId, "public/data/lobbies", id, "obstacles");
+            unsubscribeFromObstacles = onSnapshot(obstaclesRef, (snapshot) => {
+                snapshot.docChanges().forEach((change) => {
+                    if (change.type === "added") {
+                        const obsData = change.doc.data();
+                        // Add obstacle if it doesn't already exist
+                        if (!obstacles.some(o => o.id === change.doc.id)) {
+                             obstacles.push({ id: change.doc.id, ...obsData });
+                        }
+                    }
+                });
             });
         }
 
@@ -435,7 +467,7 @@
             }
         }
 
-        function startGame() {
+        async function startGame() {
             if (gameStarted) return;
             gameStarted = true;
 
@@ -446,6 +478,11 @@
             frameCount = 0;
             
             setupCanvas();
+            // Reset all players to the start position
+            for (const id in players) {
+                resetPlayer(players[id]);
+            }
+            
             gameLoop();
         }
         
@@ -459,9 +496,17 @@
             setTimeout(async () => {
                 modal.classList.add('hidden');
                 
+                // Host clears the obstacles for the next round
+                if (userId === lobbyHostId) {
+                    const obstaclesRef = collection(db, "artifacts", appId, "public/data/lobbies", lobbyId, "obstacles");
+                    const snapshot = await getDocs(obstaclesRef);
+                    const batch = writeBatch(db);
+                    snapshot.forEach(doc => batch.delete(doc.ref));
+                    await batch.commit();
+                }
+                
                 const player = players[userId];
                 if(player) {
-                    resetPlayer(player);
                     player.isReady = false;
                 }
 
@@ -514,10 +559,20 @@
             }
         }
 
-        function spawnObstacle() {
+        async function spawnAndSyncObstacle() {
             const height = Math.random() * (OBSTACLE_MAX_HEIGHT - OBSTACLE_MIN_HEIGHT) + OBSTACLE_MIN_HEIGHT;
             const onCeiling = Math.random() > 0.5;
-            obstacles.push({ x: canvas.width, y: onCeiling ? 0 : canvas.height - height, width: OBSTACLE_WIDTH, height: height });
+            
+            const obstacleData = {
+                x: canvas.width,
+                y: onCeiling ? 0 : canvas.height - height,
+                width: OBSTACLE_WIDTH,
+                height: height,
+                createdAt: serverTimestamp()
+            };
+            
+            const obstaclesRef = collection(db, "artifacts", appId, "public/data/lobbies", lobbyId, "obstacles");
+            await addDoc(obstaclesRef, obstacleData);
         }
 
         function updateObstacles() {
@@ -564,20 +619,23 @@
 
             ctx.clearRect(0, 0, canvas.width, canvas.height);
             frameCount++;
-            if (frameCount % OBSTACLE_SPAWN_RATE === 0) {
-                spawnObstacle();
+            
+            // Only the host spawns obstacles
+            if (userId === lobbyHostId && frameCount % OBSTACLE_SPAWN_RATE === 0) {
+                spawnAndSyncObstacle();
             }
+            
             updateObstacles();
             drawObstacles();
             
+            // Update physics for all players locally for smooth animation
             for (const id in players) {
-                if (id === userId && !players[id].isGameOver) {
-                    updatePlayer(players[id]);
-                }
+                updatePlayer(players[id]);
             }
             
             handleCollisions();
             
+            // Only send position updates for the local player
             const localPlayer = players[userId];
             if (localPlayer && !localPlayer.isGameOver) {
                 updatePlayerInFirestore({ x: localPlayer.x, y: localPlayer.y });
@@ -592,7 +650,9 @@
         function handleInput() {
             const player = players[userId];
             if (gameStarted && player && !player.isGameOver && isPlayerGrounded(player)) {
+                // Flip locally first for immediate response
                 flipGravity(player);
+                // Send the full physics state to sync other clients
                 updatePlayerInFirestore({
                     isFlipped: player.isFlipped,
                     gravity: player.gravity,
@@ -614,7 +674,6 @@
             const textArea = document.createElement('textarea');
             textArea.value = textToCopy;
             
-            // Make the textarea invisible
             textArea.style.position = 'fixed';
             textArea.style.top = '-9999px';
             textArea.style.left = '-9999px';
