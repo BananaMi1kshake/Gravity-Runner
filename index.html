@@ -1,0 +1,667 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Multiplayer Gravity Runner</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap" rel="stylesheet">
+    <style>
+        body {
+            font-family: 'Press Start 2P', cursive;
+            background-color: #1a1a1a;
+            color: #ffffff;
+            overflow: hidden;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            height: 100vh;
+            text-align: center;
+        }
+        .container {
+            width: 100%;
+            max-width: 1000px;
+        }
+        canvas {
+            background-color: #2a2a2a;
+            display: block;
+            margin: 0 auto;
+            border-radius: 8px;
+            box-shadow: 0 0 20px rgba(0, 255, 255, 0.5);
+        }
+        .btn {
+            @apply py-3 px-6 bg-cyan-500 hover:bg-cyan-700 rounded-lg text-2xl transition-all duration-300 disabled:opacity-50 disabled:cursor-not-allowed;
+        }
+        .input-field {
+            @apply bg-gray-200 border-2 border-cyan-400 rounded-lg text-xl text-center p-2;
+            color: #1a1a1a !important; /* Ensure text is visible */
+        }
+        .info-box {
+            background-color: rgba(0, 0, 0, 0.5);
+            padding: 15px 25px;
+            border-radius: 8px;
+            border: 2px solid #0ff;
+            margin-bottom: 20px;
+            display: inline-block;
+        }
+        .view {
+            display: none;
+        }
+        .view.active {
+            display: block;
+        }
+        #modal {
+            background-color: rgba(0, 0, 0, 0.8);
+            border: 2px solid #0ff;
+        }
+        .color-swatch {
+            @apply w-10 h-10 rounded-full cursor-pointer border-4 border-transparent transition-all hover:opacity-80;
+        }
+        .color-swatch.selected {
+            @apply border-white scale-110;
+        }
+        .player-list-item {
+            @apply flex items-center justify-between p-2 rounded-md mb-2 text-lg;
+            background-color: rgba(255, 255, 255, 0.1);
+        }
+    </style>
+</head>
+<body>
+
+    <div class="container p-4">
+        <!-- Setup View -->
+        <div id="setup-view" class="view active">
+            <h1 class="text-4xl mb-8 text-cyan-300">Player Setup</h1>
+            <div class="max-w-md mx-auto">
+                <input type="text" id="nickname-input" placeholder="ENTER NICKNAME" class="input-field w-full mb-6" maxlength="12">
+                <button id="setup-continue-btn" class="btn w-full">Continue</button>
+            </div>
+        </div>
+
+        <!-- Main Menu View -->
+        <div id="main-menu-view" class="view">
+            <h1 class="text-5xl mb-12 text-cyan-300">Gravity Runner</h1>
+            <div class="space-y-6">
+                <button id="create-lobby-btn" class="btn w-64">Create Lobby</button>
+                <button id="join-lobby-btn" class="btn w-64">Join Lobby</button>
+            </div>
+        </div>
+
+        <!-- Join Lobby View -->
+        <div id="join-lobby-view" class="view">
+            <h2 class="text-4xl mb-8 text-cyan-300">Join a Lobby</h2>
+            <input type="text" id="lobby-code-input" placeholder="ENTER CODE" class="input-field uppercase tracking-widest" maxlength="6">
+            <button id="submit-join-btn" class="btn mt-6">Join</button>
+            <p id="join-error" class="text-red-500 mt-4 h-6"></p>
+             <button id="back-to-menu-btn" class="text-cyan-400 mt-8">Back to Menu</button>
+        </div>
+
+        <!-- Lobby View -->
+        <div id="lobby-view" class="view">
+            <div id="lobby-ui">
+                 <h2 class="text-2xl mb-2 text-cyan-300">Lobby Code</h2>
+                 <div class="info-box">
+                    <span id="lobby-id-display" class="text-yellow-300 text-4xl tracking-widest"></span>
+                    <button id="copy-lobby-id-btn" class="ml-4 bg-gray-600 hover:bg-gray-500 py-2 px-3 rounded-lg text-sm">Copy</button>
+                 </div>
+                 <div class="flex flex-col md:flex-row gap-8 mt-4 max-w-4xl mx-auto">
+                    <div class="flex-1">
+                        <h3 class="text-2xl mb-4">Players</h3>
+                        <div id="player-list" class="space-y-2 h-48 overflow-y-auto p-2 bg-black bg-opacity-20 rounded-lg"></div>
+                    </div>
+                    <div class="flex-1 flex flex-col items-center justify-center">
+                        <p id="lobby-status-text" class="mb-4">Waiting for players to get ready...</p>
+                        <button id="ready-btn" class="btn w-64">Ready</button>
+                    </div>
+                 </div>
+                 <div class="mt-6">
+                    <h3 class="text-xl mb-4">Change Color</h3>
+                    <div id="lobby-color-selector" class="flex flex-wrap justify-center gap-2 md:gap-4 max-w-md mx-auto">
+                        <!-- Lobby color swatches will be inserted here by JS -->
+                    </div>
+                 </div>
+                 <button id="back-from-lobby-btn" class="text-cyan-400 mt-8">Back to Menu</button>
+            </div>
+             <div id="game-container" class="hidden mt-4">
+                <canvas id="gameCanvas"></canvas>
+             </div>
+        </div>
+
+        <!-- Game Over Modal -->
+        <div id="modal" class="hidden fixed inset-0 flex items-center justify-center">
+            <div class="text-center p-8 rounded-lg shadow-2xl">
+                <h2 id="modal-title" class="text-5xl font-bold text-yellow-300">Round Over!</h2>
+                <p id="modal-text" class="text-2xl mt-4">Returning to lobby...</p>
+            </div>
+        </div>
+    </div>
+
+    <script type="module">
+        // Firebase Imports
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, doc, setDoc, onSnapshot, collection, getDocs, serverTimestamp, setLogLevel, writeBatch, deleteDoc } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        // --- Configuration ---
+        const firebaseConfig = {
+            apiKey: "AIzaSyBudaITYK_VC4jyw07EwqidPYhTL1imXHY",
+            authDomain: "gravity-runner-game.firebaseapp.com",
+            projectId: "gravity-runner-game",
+            storageBucket: "gravity-runner-game.appspot.com",
+            messagingSenderId: "731710109798",
+            appId: "1:731710109798:web:ba30cbff216ec457c1d5a7"
+        };
+        const appId = 'gravity-runner-app';
+
+        // --- Firebase Initialization ---
+        const app = initializeApp(firebaseConfig);
+        const auth = getAuth(app);
+        const db = getFirestore(app);
+        // setLogLevel('debug');
+
+        // --- DOM Elements ---
+        const views = document.querySelectorAll('.view');
+        const nicknameInput = document.getElementById('nickname-input');
+        const setupContinueBtn = document.getElementById('setup-continue-btn');
+        const createLobbyBtn = document.getElementById('create-lobby-btn');
+        const joinLobbyBtn = document.getElementById('join-lobby-btn');
+        const submitJoinBtn = document.getElementById('submit-join-btn');
+        const backToMenuBtn = document.getElementById('back-to-menu-btn');
+        const backFromLobbyBtn = document.getElementById('back-from-lobby-btn');
+        const lobbyCodeInput = document.getElementById('lobby-code-input');
+        const lobbyIdDisplay = document.getElementById('lobby-id-display');
+        const copyLobbyIdBtn = document.getElementById('copy-lobby-id-btn');
+        const joinError = document.getElementById('join-error');
+        const lobbyUi = document.getElementById('lobby-ui');
+        const gameContainer = document.getElementById('game-container');
+        const playerList = document.getElementById('player-list');
+        const readyBtn = document.getElementById('ready-btn');
+        const lobbyColorSelector = document.getElementById('lobby-color-selector');
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        const modal = document.getElementById('modal');
+        
+        // --- Game Constants ---
+        const PLAYER_SIZE = 20;
+        const GRAVITY = 0.5;
+        const FLIP_SPEED = -12;
+        const OBSTACLE_WIDTH = 30;
+        const OBSTACLE_MIN_HEIGHT = 40;
+        const OBSTACLE_MAX_HEIGHT = 150;
+        const OBSTACLE_SPEED = 4;
+        const OBSTACLE_SPAWN_RATE = 120;
+        const PLAYER_COLORS = [
+            '#ff4136', '#ff851b', '#ffdc00', '#2ecc40', '#01ff70', 
+            '#7fdbff', '#0074d9', '#39cccc', '#b10dc9', '#f012be',
+            '#85144b', '#ffffff', '#dddddd', '#aaaaaa', '#4682b4'
+        ];
+
+        // --- Game State ---
+        let userId = null;
+        let lobbyId = null;
+        let playerNickname = '';
+        let players = {};
+        let obstacles = [];
+        let frameCount = 0;
+        let gameStarted = false;
+        let unsubscribeFromLobby = null;
+        let animationFrameId = null;
+
+        // --- Utility Functions ---
+        function showView(viewId) {
+            views.forEach(view => view.classList.remove('active'));
+            document.getElementById(viewId).classList.add('active');
+        }
+
+        function generateLobbyId() {
+            return Math.random().toString(36).substring(2, 8).toUpperCase();
+        }
+
+        // --- Setup ---
+        function handleSetupContinue() {
+            const nickname = nicknameInput.value.trim();
+            if (nickname) {
+                playerNickname = nickname;
+                showView('main-menu-view');
+            } else {
+                alert("Please enter a nickname.");
+            }
+        }
+        
+        function populateLobbyColorSelector() {
+            lobbyColorSelector.innerHTML = '';
+            const currentPlayerColor = players[userId]?.color;
+
+            PLAYER_COLORS.forEach((color) => {
+                const swatch = document.createElement('div');
+                swatch.classList.add('color-swatch');
+                swatch.style.backgroundColor = color;
+                swatch.dataset.color = color;
+                
+                if (color === currentPlayerColor) {
+                    swatch.classList.add('selected');
+                }
+
+                swatch.addEventListener('click', () => {
+                    const newColor = swatch.dataset.color;
+                    if (players[userId]) {
+                        players[userId].color = newColor;
+                    }
+                    updatePlayerInFirestore({ color: newColor });
+                    
+                    document.querySelectorAll('#lobby-color-selector .color-swatch').forEach(s => s.classList.remove('selected'));
+                    swatch.classList.add('selected');
+                    updatePlayerList();
+                });
+                lobbyColorSelector.appendChild(swatch);
+            });
+        }
+
+        // --- Game Setup ---
+        function setupCanvas() {
+            const container = document.getElementById('game-container');
+            const availableWidth = container.clientWidth * 0.98;
+            const availableHeight = window.innerHeight * 0.6;
+            canvas.width = Math.min(1000, availableWidth);
+            canvas.height = Math.min(600, availableHeight);
+        }
+
+        function resetPlayer(player) {
+            player.x = 100;
+            player.y = canvas.height - PLAYER_SIZE;
+            player.velocityY = 0;
+            player.gravity = GRAVITY;
+            player.isFlipped = false;
+            player.isGameOver = false;
+        }
+
+        function initializePlayer(id) {
+            const initialColor = PLAYER_COLORS[Math.floor(Math.random() * PLAYER_COLORS.length)];
+            const player = {
+                id: id,
+                nickname: playerNickname,
+                color: initialColor,
+                isReady: false,
+                x: 100,
+                y: canvas.height - PLAYER_SIZE,
+                velocityY: 0,
+                gravity: GRAVITY,
+                isFlipped: false,
+                isGameOver: false,
+            };
+            players[id] = player;
+            return player;
+        }
+
+        async function updatePlayerInFirestore(playerData) {
+            if (!userId || !lobbyId) return;
+            const playerRef = doc(db, "artifacts", appId, "public/data/lobbies", lobbyId, "players", userId);
+            try {
+                await setDoc(playerRef, { ...playerData, lastUpdate: serverTimestamp() }, { merge: true });
+            } catch (error) {
+                console.error("Error updating player state:", error);
+            }
+        }
+
+        // --- Lobby Management ---
+        async function handleCreateLobby() {
+            lobbyId = generateLobbyId();
+            lobbyIdDisplay.textContent = lobbyId;
+            showView('lobby-view');
+            await joinLobby(lobbyId);
+        }
+
+        async function handleSubmitJoin() {
+            const code = lobbyCodeInput.value.toUpperCase();
+            if (code.length !== 6) {
+                joinError.textContent = "Code must be 6 characters.";
+                return;
+            }
+            joinError.textContent = "";
+
+            const lobbyPlayersRef = collection(db, "artifacts", appId, "public/data/lobbies", code, "players");
+            try {
+                const snapshot = await getDocs(lobbyPlayersRef);
+                if (snapshot.empty) {
+                     joinError.textContent = "Lobby not found.";
+                } else {
+                    lobbyId = code;
+                    lobbyIdDisplay.textContent = lobbyId;
+                    showView('lobby-view');
+                    await joinLobby(lobbyId);
+                }
+            } catch (error) {
+                 console.error("Error checking for lobby:", error);
+                 joinError.textContent = "Error finding lobby.";
+            }
+        }
+        
+        async function joinLobby(id) {
+            lobbyId = id;
+            const player = initializePlayer(userId);
+            startLobbyListener(lobbyId);
+            await updatePlayerInFirestore(player);
+        }
+
+        async function handleLeaveLobby() {
+            if (unsubscribeFromLobby) {
+                unsubscribeFromLobby();
+                unsubscribeFromLobby = null;
+            }
+            if (userId && lobbyId) {
+                const playerRef = doc(db, "artifacts", appId, "public/data/lobbies", lobbyId, "players", userId);
+                await deleteDoc(playerRef);
+            }
+            lobbyId = null;
+            players = {};
+            showView('main-menu-view');
+        }
+        
+        function startLobbyListener(id) {
+            if (unsubscribeFromLobby) unsubscribeFromLobby();
+            let hasPopulatedSelector = false;
+
+            const playersRef = collection(db, "artifacts", appId, "public/data/lobbies", id, "players");
+            unsubscribeFromLobby = onSnapshot(playersRef, (snapshot) => {
+                const remotePlayersData = {};
+                snapshot.forEach(doc => {
+                    remotePlayersData[doc.id] = doc.data();
+                });
+                
+                for (const playerId in remotePlayersData) {
+                    players[playerId] = { ...(players[playerId] || {}), ...remotePlayersData[playerId] };
+                }
+
+                const remotePlayerIds = Object.keys(remotePlayersData);
+                for (const localPlayerId in players) {
+                    if (!remotePlayerIds.includes(localPlayerId)) {
+                        delete players[localPlayerId];
+                    }
+                }
+                
+                const allPlayers = Object.values(players);
+                if (!gameStarted) {
+                    if (!hasPopulatedSelector && players[userId]) {
+                        populateLobbyColorSelector();
+                        hasPopulatedSelector = true;
+                    }
+                    updatePlayerList();
+                    const allReady = allPlayers.length > 0 && allPlayers.every(p => p.isReady);
+                    if (allReady) {
+                        startGame();
+                    }
+                } else {
+                    const allDead = allPlayers.length > 0 && allPlayers.every(p => p.isGameOver);
+                    if (allDead) {
+                        endRound();
+                    }
+                }
+            });
+        }
+
+        function updatePlayerList() {
+            playerList.innerHTML = '';
+            for (const id in players) {
+                const p = players[id];
+                const item = document.createElement('div');
+                item.className = 'player-list-item';
+                
+                const nicknameSpan = document.createElement('span');
+                nicknameSpan.textContent = p.nickname;
+                nicknameSpan.style.color = p.color;
+                nicknameSpan.style.textShadow = `0 0 5px ${p.color}`;
+                
+                const statusSpan = document.createElement('span');
+                statusSpan.textContent = p.isReady ? 'Ready' : 'Not Ready';
+                statusSpan.className = p.isReady ? 'text-green-400' : 'text-yellow-400';
+
+                item.appendChild(nicknameSpan);
+                item.appendChild(statusSpan);
+                playerList.appendChild(item);
+            }
+        }
+        
+        async function handleReadyClick() {
+            const player = players[userId];
+            if (player) {
+                player.isReady = !player.isReady;
+                readyBtn.textContent = player.isReady ? 'Unready' : 'Ready';
+                readyBtn.classList.toggle('bg-red-500', player.isReady);
+                readyBtn.classList.toggle('hover:bg-red-700', player.isReady);
+                readyBtn.classList.toggle('bg-cyan-500', !player.isReady);
+                readyBtn.classList.toggle('hover:bg-cyan-700', !player.isReady);
+                updatePlayerList();
+                await updatePlayerInFirestore({ isReady: player.isReady });
+            }
+        }
+
+        function startGame() {
+            if (gameStarted) return;
+            gameStarted = true;
+
+            lobbyUi.classList.add('hidden');
+            gameContainer.classList.remove('hidden');
+            
+            obstacles = [];
+            frameCount = 0;
+            
+            setupCanvas();
+            gameLoop();
+        }
+        
+        async function endRound() {
+            if (!gameStarted) return;
+            gameStarted = false;
+            cancelAnimationFrame(animationFrameId);
+
+            modal.classList.remove('hidden');
+
+            setTimeout(async () => {
+                modal.classList.add('hidden');
+                
+                const player = players[userId];
+                if(player) {
+                    resetPlayer(player);
+                    player.isReady = false;
+                }
+
+                const batch = writeBatch(db);
+                const playersRef = collection(db, "artifacts", appId, "public/data/lobbies", lobbyId, "players");
+                const playersSnapshot = await getDocs(playersRef);
+                playersSnapshot.forEach(playerDoc => {
+                    batch.update(playerDoc.ref, { isGameOver: false, isReady: false });
+                });
+                await batch.commit();
+                
+                showView('lobby-view');
+                lobbyUi.classList.remove('hidden');
+                gameContainer.classList.add('hidden');
+                
+                readyBtn.textContent = 'Ready';
+                readyBtn.classList.remove('bg-red-500', 'hover:bg-red-700');
+                readyBtn.classList.add('bg-cyan-500', 'hover:bg-cyan-700');
+                
+                updatePlayerList();
+            }, 3000);
+        }
+
+        // --- Game Logic ---
+        function isPlayerGrounded(player) {
+            if (!player) return false;
+            return (
+                (!player.isFlipped && player.y >= canvas.height - PLAYER_SIZE - 1) ||
+                (player.isFlipped && player.y <= 1)
+            );
+        }
+
+        function flipGravity(player) {
+            if (player.isGameOver) return;
+            player.isFlipped = !player.isFlipped;
+            player.gravity = -player.gravity;
+            player.velocityY = player.isFlipped ? FLIP_SPEED : -FLIP_SPEED;
+        }
+
+        function updatePlayer(player) {
+            if (!player || player.isGameOver) return;
+            player.velocityY += player.gravity;
+            player.y += player.velocityY;
+            if (!player.isFlipped && player.y >= canvas.height - PLAYER_SIZE) {
+                player.y = canvas.height - PLAYER_SIZE;
+                player.velocityY = 0;
+            } else if (player.isFlipped && player.y <= 0) {
+                player.y = 0;
+                player.velocityY = 0;
+            }
+        }
+
+        function spawnObstacle() {
+            const height = Math.random() * (OBSTACLE_MAX_HEIGHT - OBSTACLE_MIN_HEIGHT) + OBSTACLE_MIN_HEIGHT;
+            const onCeiling = Math.random() > 0.5;
+            obstacles.push({ x: canvas.width, y: onCeiling ? 0 : canvas.height - height, width: OBSTACLE_WIDTH, height: height });
+        }
+
+        function updateObstacles() {
+            for (let i = obstacles.length - 1; i >= 0; i--) {
+                obstacles[i].x -= OBSTACLE_SPEED;
+                if (obstacles[i].x + OBSTACLE_WIDTH < 0) {
+                    obstacles.splice(i, 1);
+                }
+            }
+        }
+
+        function checkCollision(player, obstacle) {
+            return player.x < obstacle.x + obstacle.width && player.x + PLAYER_SIZE > obstacle.x && player.y < obstacle.y + obstacle.height && player.y + PLAYER_SIZE > obstacle.y;
+        }
+
+        function handleCollisions() {
+            const player = players[userId];
+            if (!player || player.isGameOver) return;
+            for (const obs of obstacles) {
+                if (checkCollision(player, obs)) {
+                    player.isGameOver = true;
+                    updatePlayerInFirestore({ isGameOver: true });
+                    break;
+                }
+            }
+        }
+
+        function drawPlayer(player) {
+            if(!player || typeof player.color === 'undefined') return;
+            ctx.fillStyle = player.color;
+            ctx.globalAlpha = player.isGameOver ? 0.4 : 1.0;
+            ctx.fillRect(player.x, player.y, PLAYER_SIZE, PLAYER_SIZE);
+            ctx.globalAlpha = 1.0;
+        }
+
+        function drawObstacles() {
+            ctx.fillStyle = '#ff6b6b';
+            obstacles.forEach(obs => ctx.fillRect(obs.x, obs.y, obs.width, obs.height));
+        }
+
+        function gameLoop() {
+            if (!gameStarted) return;
+            animationFrameId = requestAnimationFrame(gameLoop);
+
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            frameCount++;
+            if (frameCount % OBSTACLE_SPAWN_RATE === 0) {
+                spawnObstacle();
+            }
+            updateObstacles();
+            drawObstacles();
+            
+            for (const id in players) {
+                if (id === userId && !players[id].isGameOver) {
+                    updatePlayer(players[id]);
+                }
+            }
+            
+            handleCollisions();
+            
+            const localPlayer = players[userId];
+            if (localPlayer && !localPlayer.isGameOver) {
+                updatePlayerInFirestore({ x: localPlayer.x, y: localPlayer.y });
+            }
+
+            for (const id in players) {
+                drawPlayer(players[id]);
+            }
+        }
+
+        // --- Event Listeners ---
+        function handleInput() {
+            const player = players[userId];
+            if (gameStarted && player && !player.isGameOver && isPlayerGrounded(player)) {
+                flipGravity(player);
+                updatePlayerInFirestore({
+                    isFlipped: player.isFlipped,
+                    gravity: player.gravity,
+                    velocityY: player.velocityY,
+                    y: player.y
+                });
+            }
+        }
+        
+        setupContinueBtn.addEventListener('click', handleSetupContinue);
+        createLobbyBtn.addEventListener('click', handleCreateLobby);
+        joinLobbyBtn.addEventListener('click', () => showView('join-lobby-view'));
+        submitJoinBtn.addEventListener('click', handleSubmitJoin);
+        backToMenuBtn.addEventListener('click', () => showView('main-menu-view'));
+        backFromLobbyBtn.addEventListener('click', handleLeaveLobby);
+        
+        copyLobbyIdBtn.addEventListener('click', () => {
+            const textToCopy = lobbyIdDisplay.textContent;
+            const textArea = document.createElement('textarea');
+            textArea.value = textToCopy;
+            
+            // Make the textarea invisible
+            textArea.style.position = 'fixed';
+            textArea.style.top = '-9999px';
+            textArea.style.left = '-9999px';
+            
+            document.body.appendChild(textArea);
+            textArea.focus();
+            textArea.select();
+            
+            try {
+                document.execCommand('copy');
+                copyLobbyIdBtn.textContent = 'Copied!';
+            } catch (err) {
+                console.error('Fallback: Oops, unable to copy', err);
+                copyLobbyIdBtn.textContent = 'Error';
+            }
+            
+            document.body.removeChild(textArea);
+            setTimeout(() => { copyLobbyIdBtn.textContent = 'Copy'; }, 2000);
+        });
+        readyBtn.addEventListener('click', handleReadyClick);
+        
+        window.addEventListener('keydown', (e) => { if (e.code === 'Space') handleInput(); });
+        canvas.addEventListener('click', handleInput);
+        window.addEventListener('resize', () => { if(gameStarted) setupCanvas(); });
+
+        // --- Authentication and Initialization ---
+        async function main() {
+            onAuthStateChanged(auth, (user) => {
+                if (user) {
+                    userId = user.uid;
+                    setupContinueBtn.disabled = false;
+                    console.log("Authenticated with UID:", userId);
+                } else {
+                    setupContinueBtn.disabled = true;
+                }
+            });
+
+            try {
+                setupContinueBtn.disabled = true;
+                await signInAnonymously(auth);
+            } catch (error) {
+                console.error("Authentication failed:", error);
+                document.body.innerHTML = "Error: Could not connect to the game service.";
+            }
+        }
+
+        main();
+    </script>
+</body>
+</html>
